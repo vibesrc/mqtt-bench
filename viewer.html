@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MQTT Bench // Performance Viewer</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+    <style>
+        :root {
+            --bg-primary: #050508;
+            --bg-secondary: #0a0a0f;
+            --bg-tertiary: #12121a;
+            --bg-panel: #0d0d14;
+            --border-color: #1a1a25;
+            --border-glow: #2a2a3a;
+
+            --text-primary: #e8e8f0;
+            --text-secondary: #888899;
+            --text-muted: #555566;
+
+            --accent-green: #00ff99;
+            --accent-green-dim: #00cc77;
+            --accent-amber: #ffcc00;
+            --accent-amber-dim: #cc9900;
+            --accent-blue: #00aaff;
+            --accent-red: #ff4466;
+            --accent-purple: #aa77ff;
+
+            --glow-green: 0 0 20px rgba(0, 255, 153, 0.3);
+            --glow-amber: 0 0 20px rgba(255, 204, 0, 0.3);
+
+            --font-mono: 'JetBrains Mono', monospace;
+            --font-display: 'Space Grotesk', sans-serif;
+
+            --chart-colors: #00ff99, #00aaff, #ffcc00, #ff4466, #aa77ff, #ff8844;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-mono);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Scanline overlay effect */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.1) 2px,
+                rgba(0, 0, 0, 0.1) 4px
+            );
+            pointer-events: none;
+            z-index: 10000;
+            opacity: 0.3;
+        }
+
+        /* Grid background */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-image:
+                linear-gradient(rgba(0, 255, 153, 0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 255, 153, 0.02) 1px, transparent 1px);
+            background-size: 50px 50px;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--accent-green), var(--accent-blue));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.2rem;
+            color: var(--bg-primary);
+        }
+
+        .logo-text {
+            font-family: var(--font-display);
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .logo-text span {
+            color: var(--accent-green);
+        }
+
+        .header-status {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            box-shadow: var(--glow-green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.loading {
+            background: var(--accent-amber);
+            box-shadow: var(--glow-amber);
+        }
+
+        .status-dot.error {
+            background: var(--accent-red);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* File loader */
+        .file-loader {
+            padding: 4rem 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 60vh;
+        }
+
+        .file-loader.hidden {
+            display: none;
+        }
+
+        .drop-zone {
+            width: 100%;
+            max-width: 600px;
+            border: 2px dashed var(--border-color);
+            border-radius: 16px;
+            padding: 4rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: var(--bg-secondary);
+        }
+
+        .drop-zone:hover,
+        .drop-zone.dragover {
+            border-color: var(--accent-green);
+            background: rgba(0, 255, 153, 0.05);
+            box-shadow: var(--glow-green);
+        }
+
+        .drop-zone-icon {
+            font-size: 4rem;
+            margin-bottom: 1.5rem;
+            opacity: 0.5;
+        }
+
+        .drop-zone-text {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .drop-zone-hint {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .drop-zone-hint code {
+            background: var(--bg-tertiary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            color: var(--accent-green);
+        }
+
+        /* Main dashboard */
+        .dashboard {
+            display: none;
+            padding: 1.5rem;
+            gap: 1.5rem;
+        }
+
+        .dashboard.visible {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            grid-template-rows: auto 1fr;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            grid-row: 1 / -1;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-secondary);
+        }
+
+        .panel-title {
+            font-family: var(--font-display);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+        }
+
+        .panel-badge {
+            background: var(--accent-green);
+            color: var(--bg-primary);
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+        }
+
+        .panel-body {
+            padding: 1rem;
+        }
+
+        /* Filters */
+        .filter-group {
+            margin-bottom: 1rem;
+        }
+
+        .filter-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .filter-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            display: block;
+        }
+
+        .filter-select {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .filter-select:hover {
+            border-color: var(--border-glow);
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: var(--accent-green);
+            box-shadow: 0 0 0 2px rgba(0, 255, 153, 0.1);
+        }
+
+        /* Run list */
+        .run-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .run-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .run-list::-webkit-scrollbar-track {
+            background: var(--bg-tertiary);
+        }
+
+        .run-list::-webkit-scrollbar-thumb {
+            background: var(--border-glow);
+            border-radius: 3px;
+        }
+
+        .run-item {
+            padding: 0.75rem;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .run-item:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--border-color);
+        }
+
+        .run-item.selected {
+            background: rgba(0, 255, 153, 0.1);
+            border-color: var(--accent-green);
+        }
+
+        .run-item-color {
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 60%;
+            border-radius: 2px;
+        }
+
+        .run-item-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+            padding-left: 0.75rem;
+        }
+
+        .run-item-scenario {
+            font-weight: 600;
+            font-size: 0.875rem;
+        }
+
+        .run-item-qos {
+            font-size: 0.7rem;
+            background: var(--bg-tertiary);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            color: var(--text-secondary);
+        }
+
+        .run-item-meta {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding-left: 0.75rem;
+        }
+
+        .run-item-stats {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.5rem;
+            padding-left: 0.75rem;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+
+        .run-item-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .run-item-stat-value {
+            color: var(--accent-green);
+            font-weight: 500;
+        }
+
+        /* Main content */
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        /* Stats row */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .stat-card {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-green), transparent);
+        }
+
+        .stat-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-value {
+            font-family: var(--font-display);
+            font-size: 1.75rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .stat-value.green { color: var(--accent-green); }
+        .stat-value.amber { color: var(--accent-amber); }
+        .stat-value.blue { color: var(--accent-blue); }
+        .stat-value.red { color: var(--accent-red); }
+
+        .stat-unit {
+            font-size: 0.875rem;
+            font-weight: 400;
+            color: var(--text-secondary);
+            margin-left: 0.25rem;
+        }
+
+        .stat-detail {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        /* Charts */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+        }
+
+        .chart-panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem;
+        }
+
+        .chart-panel.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .chart-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+        }
+
+        .chart-title {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.75rem;
+        }
+
+        .chart-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+        }
+
+        .chart-legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 250px;
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 4rem 2rem;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+
+        .empty-state-text {
+            font-size: 0.875rem;
+        }
+
+        /* Comparison mode */
+        .comparison-toggle {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .comparison-toggle:hover {
+            background: var(--bg-secondary);
+        }
+
+        .comparison-toggle input {
+            display: none;
+        }
+
+        .comparison-toggle-switch {
+            width: 36px;
+            height: 20px;
+            background: var(--border-color);
+            border-radius: 10px;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+
+        .comparison-toggle-switch::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+
+        .comparison-toggle input:checked + .comparison-toggle-switch {
+            background: var(--accent-green);
+        }
+
+        .comparison-toggle input:checked + .comparison-toggle-switch::after {
+            left: 18px;
+            background: var(--bg-primary);
+        }
+
+        .comparison-toggle-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(5, 5, 8, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .loading-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-green);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 1rem;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .tab:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: var(--accent-green);
+            color: var(--bg-primary);
+            border-color: var(--accent-green);
+        }
+
+        /* Comparison table */
+        .table-container {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        .comparison-table th,
+        .comparison-table td {
+            padding: 1rem;
+            text-align: right;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .comparison-table th {
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            letter-spacing: 1px;
+        }
+
+        .comparison-table th:first-child,
+        .comparison-table td:first-child {
+            text-align: left;
+            position: sticky;
+            left: 0;
+            background: var(--bg-panel);
+        }
+
+        .comparison-table th:first-child {
+            background: var(--bg-secondary);
+        }
+
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .comparison-table tr:hover td {
+            background: var(--bg-tertiary);
+        }
+
+        .comparison-table .broker-name {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .comparison-table .broker-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .comparison-table .best {
+            color: var(--accent-green);
+            font-weight: 600;
+        }
+
+        .comparison-table .worst {
+            color: var(--accent-red);
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .dashboard.visible {
+                grid-template-columns: 280px 1fr;
+            }
+
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .dashboard.visible {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                grid-row: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">M</div>
+            <div class="logo-text">MQTT<span>Bench</span></div>
+        </div>
+        <div class="header-status">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Ready</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- File loader -->
+    <div class="file-loader" id="fileLoader">
+        <div class="drop-zone" id="dropZone">
+            <div class="drop-zone-icon">📊</div>
+            <div class="drop-zone-text">Drop your DuckDB file here</div>
+            <div class="drop-zone-hint">or click to select <code>mqtt-bench.duckdb</code></div>
+        </div>
+        <input type="file" id="fileInput" accept=".duckdb,.db" style="display: none;">
+    </div>
+
+    <!-- Dashboard -->
+    <div class="dashboard" id="dashboard">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <!-- Filters -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Configuration</span>
+                </div>
+                <div class="panel-body">
+                    <div class="filter-group">
+                        <label class="filter-label">Scenario</label>
+                        <select class="filter-select" id="filterScenario">
+                            <option value="">Select a scenario...</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label">QoS</label>
+                        <select class="filter-select" id="filterQos">
+                            <option value="">Any</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label">Publishers</label>
+                        <select class="filter-select" id="filterPublishers">
+                            <option value="">Any</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label">Subscribers</label>
+                        <select class="filter-select" id="filterSubscribers">
+                            <option value="">Any</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label">Rate (msg/s)</label>
+                        <select class="filter-select" id="filterRate">
+                            <option value="">Any</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Run list (shows which runs are being compared) -->
+            <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
+                <div class="panel-header">
+                    <span class="panel-title">Comparing Runs</span>
+                    <span class="panel-badge" id="runCount">0</span>
+                </div>
+                <div class="panel-body" style="flex: 1; overflow: hidden; padding: 0.5rem;">
+                    <div class="run-list" id="runList"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="main-content" id="mainContent">
+            <div class="empty-state" id="emptyState">
+                <div class="empty-state-icon">📈</div>
+                <div class="empty-state-text">Select a scenario to compare runs</div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="tabs" id="tabs" style="display: none;">
+                <button class="tab active" data-tab="charts">Charts</button>
+                <button class="tab" data-tab="table">Comparison Table</button>
+            </div>
+
+            <!-- Charts view -->
+            <div class="charts-grid" id="chartsGrid" style="display: none;"></div>
+
+            <!-- Table view -->
+            <div class="table-container" id="tableContainer" style="display: none;">
+                <table class="comparison-table" id="comparisonTable"></table>
+            </div>
+        </main>
+    </div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading database...</div>
+    </div>
+
+    <script type="module">
+        // Import DuckDB-WASM (must match Rust duckdb version ~1.1.x)
+        import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+
+        // Chart colors
+        const CHART_COLORS = [
+            '#00ff99', '#00aaff', '#ffcc00', '#ff4466', '#aa77ff', '#ff8844',
+            '#00ffcc', '#ff77aa', '#77ff00', '#7777ff'
+        ];
+
+        // Global state
+        let db = null;
+        let conn = null;
+        let runs = [];
+        let selectedRuns = [];
+        let charts = {};
+
+        // Initialize DuckDB
+        async function initDuckDB() {
+            const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+            const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
+
+            const worker_url = URL.createObjectURL(
+                new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+            );
+
+            const worker = new Worker(worker_url);
+            const logger = new duckdb.ConsoleLogger();
+            db = new duckdb.AsyncDuckDB(logger, worker);
+
+            await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+            URL.revokeObjectURL(worker_url);
+
+            return db;
+        }
+
+        // Load database file
+        async function loadDatabase(file) {
+            showLoading(true);
+            setStatus('loading', 'Loading...');
+
+            try {
+                if (!db) {
+                    await initDuckDB();
+                }
+
+                const arrayBuffer = await file.arrayBuffer();
+                await db.registerFileBuffer(file.name, new Uint8Array(arrayBuffer));
+
+                conn = await db.connect();
+                await conn.query(`ATTACH '${file.name}' AS benchdb (READ_ONLY)`);
+
+                await loadRuns();
+
+                document.getElementById('fileLoader').classList.add('hidden');
+                document.getElementById('dashboard').classList.add('visible');
+                setStatus('ready', 'Connected');
+
+            } catch (error) {
+                console.error('Failed to load database:', error);
+                setStatus('error', 'Error loading');
+                alert('Failed to load database: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // Load runs from database
+        async function loadRuns() {
+            const result = await conn.query(`
+                SELECT
+                    r.run_id,
+                    r.started_at,
+                    r.broker_host,
+                    r.broker_name,
+                    r.container_name,
+                    s.scenario_id,
+                    s.scenario_name,
+                    s.qos,
+                    s.publishers,
+                    s.subscribers,
+                    s.msg_rate,
+                    s.duration_ns,
+                    f.total_sent,
+                    f.total_received,
+                    f.delivery_rate,
+                    f.p99_ns
+                FROM benchdb.runs r
+                JOIN benchdb.scenarios s ON r.run_id = s.run_id
+                LEFT JOIN benchdb.final_results f ON s.scenario_id = f.scenario_id
+                ORDER BY r.started_at DESC
+            `);
+
+            runs = result.toArray().map(row => ({
+                run_id: row.run_id,
+                started_at: row.started_at,
+                broker_host: row.broker_host,
+                broker_name: row.broker_name,
+                container_name: row.container_name,
+                scenario_id: row.scenario_id,
+                scenario_name: row.scenario_name,
+                qos: row.qos,
+                publishers: row.publishers,
+                subscribers: row.subscribers,
+                msg_rate: row.msg_rate,
+                duration_ns: Number(row.duration_ns),
+                total_sent: Number(row.total_sent || 0),
+                total_received: Number(row.total_received || 0),
+                delivery_rate: row.delivery_rate,
+                p99_ns: Number(row.p99_ns || 0)
+            }));
+
+            // Build color map for consistent colors per container
+            buildColorMap();
+
+            // Populate all filter dropdowns based on available data
+            populateFilters();
+            renderRunList();
+        }
+
+        // Populate filter dropdowns with unique values from runs
+        function populateFilters() {
+            const scenarios = [...new Set(runs.map(r => r.scenario_name))].sort();
+            const qosLevels = [...new Set(runs.map(r => r.qos))].sort((a, b) => a - b);
+            const publishers = [...new Set(runs.map(r => r.publishers))].sort((a, b) => a - b);
+            const subscribers = [...new Set(runs.map(r => r.subscribers))].sort((a, b) => a - b);
+            const rates = [...new Set(runs.map(r => r.msg_rate))].sort((a, b) => a - b);
+
+            document.getElementById('filterScenario').innerHTML =
+                '<option value="">Select a scenario...</option>' +
+                scenarios.map(s => `<option value="${s}">${s}</option>`).join('');
+
+            document.getElementById('filterQos').innerHTML =
+                '<option value="">Any</option>' +
+                qosLevels.map(q => `<option value="${q}">QoS ${q}</option>`).join('');
+
+            document.getElementById('filterPublishers').innerHTML =
+                '<option value="">Any</option>' +
+                publishers.map(p => `<option value="${p}">${p}</option>`).join('');
+
+            document.getElementById('filterSubscribers').innerHTML =
+                '<option value="">Any</option>' +
+                subscribers.map(s => `<option value="${s}">${s}</option>`).join('');
+
+            document.getElementById('filterRate').innerHTML =
+                '<option value="">Any</option>' +
+                rates.map(r => `<option value="${r}">${r}</option>`).join('');
+        }
+
+        // Get display name for a run (prefer container name, then broker name)
+        function getRunDisplayName(run) {
+            return run.container_name || run.broker_name || run.broker_host || `Run ${run.scenario_id.slice(0, 8)}`;
+        }
+
+        // Color map for consistent colors per container/broker name
+        let colorMap = {};
+
+        // Build color map from unique display names
+        function buildColorMap() {
+            const uniqueNames = [...new Set(runs.map(r => getRunDisplayName(r)))].sort();
+            colorMap = {};
+            uniqueNames.forEach((name, i) => {
+                colorMap[name] = CHART_COLORS[i % CHART_COLORS.length];
+            });
+        }
+
+        // Get consistent color for a run based on its display name
+        function getRunColor(run) {
+            const name = getRunDisplayName(run);
+            return colorMap[name] || CHART_COLORS[0];
+        }
+
+        // Filter and select runs based on all configuration filters
+        async function updateSelectedRuns() {
+            const filterScenario = document.getElementById('filterScenario').value;
+            const filterQos = document.getElementById('filterQos').value;
+            const filterPublishers = document.getElementById('filterPublishers').value;
+            const filterSubscribers = document.getElementById('filterSubscribers').value;
+            const filterRate = document.getElementById('filterRate').value;
+
+            if (!filterScenario) {
+                selectedRuns = [];
+            } else {
+                selectedRuns = runs.filter(r => {
+                    if (r.scenario_name !== filterScenario) return false;
+                    if (filterQos && r.qos !== parseInt(filterQos)) return false;
+                    if (filterPublishers && r.publishers !== parseInt(filterPublishers)) return false;
+                    if (filterSubscribers && r.subscribers !== parseInt(filterSubscribers)) return false;
+                    if (filterRate && r.msg_rate !== parseInt(filterRate)) return false;
+                    return true;
+                });
+            }
+
+            renderRunList();
+            await renderDashboard();
+        }
+
+        // Render run list (shows runs being compared)
+        function renderRunList() {
+            document.getElementById('runCount').textContent = selectedRuns.length;
+
+            const container = document.getElementById('runList');
+
+            if (selectedRuns.length === 0) {
+                container.innerHTML = '<div class="empty-state" style="padding: 2rem;"><div class="empty-state-text">Select a scenario to compare runs</div></div>';
+                return;
+            }
+
+            container.innerHTML = selectedRuns.map((run) => {
+                const color = getRunColor(run);
+                const displayName = getRunDisplayName(run);
+                const date = new Date(run.started_at);
+                const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+                const p99 = formatLatency(run.p99_ns);
+
+                return `
+                    <div class="run-item selected">
+                        <div class="run-item-color" style="background: ${color}"></div>
+                        <div class="run-item-header">
+                            <span class="run-item-scenario">${displayName}</span>
+                            <span class="run-item-qos">QoS ${run.qos}</span>
+                        </div>
+                        <div class="run-item-meta">${dateStr}</div>
+                        <div class="run-item-stats">
+                            <div class="run-item-stat">
+                                <span>Pub:</span>
+                                <span class="run-item-stat-value">${run.publishers}</span>
+                            </div>
+                            <div class="run-item-stat">
+                                <span>Sub:</span>
+                                <span class="run-item-stat-value">${run.subscribers}</span>
+                            </div>
+                            <div class="run-item-stat">
+                                <span>P99:</span>
+                                <span class="run-item-stat-value">${p99}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Current tab
+        let currentTab = 'charts';
+
+        // Render dashboard
+        async function renderDashboard() {
+            if (selectedRuns.length === 0) {
+                document.getElementById('emptyState').style.display = 'flex';
+                document.getElementById('tabs').style.display = 'none';
+                document.getElementById('chartsGrid').style.display = 'none';
+                document.getElementById('tableContainer').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('emptyState').style.display = 'none';
+            document.getElementById('tabs').style.display = 'flex';
+
+            // Show current tab content
+            showTab(currentTab);
+        }
+
+        // Show tab
+        async function showTab(tab) {
+            currentTab = tab;
+
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tab);
+            });
+
+            // Show/hide content
+            document.getElementById('chartsGrid').style.display = tab === 'charts' ? 'grid' : 'none';
+            document.getElementById('tableContainer').style.display = tab === 'table' ? 'block' : 'none';
+
+            if (tab === 'charts') {
+                await renderCharts();
+            } else {
+                await renderComparisonTable();
+            }
+        }
+
+        // Render comparison table
+        async function renderComparisonTable() {
+            const table = document.getElementById('comparisonTable');
+
+            // Get final results for all selected runs
+            const runResults = [];
+            for (const run of selectedRuns) {
+                const result = await conn.query(`
+                    SELECT
+                        f.total_sent,
+                        f.total_received,
+                        f.avg_recv_rate,
+                        f.delivery_rate,
+                        f.p50_ns,
+                        f.p95_ns,
+                        f.p99_ns,
+                        f.mean_ns
+                    FROM benchdb.final_results f
+                    WHERE f.scenario_id = '${run.scenario_id}'
+                `);
+
+                const data = result.toArray()[0];
+                if (data) {
+                    runResults.push({
+                        run,
+                        ...data,
+                        avg_recv_rate: Number(data.avg_recv_rate),
+                        delivery_rate: Number(data.delivery_rate),
+                        p50_ns: Number(data.p50_ns),
+                        p95_ns: Number(data.p95_ns),
+                        p99_ns: Number(data.p99_ns),
+                        mean_ns: Number(data.mean_ns)
+                    });
+                }
+            }
+
+            // Find best/worst for each metric
+            const metrics = ['avg_recv_rate', 'delivery_rate', 'p50_ns', 'p95_ns', 'p99_ns', 'mean_ns'];
+            const best = {};
+            const worst = {};
+
+            metrics.forEach(metric => {
+                const values = runResults.map(r => r[metric]);
+                if (metric === 'avg_recv_rate' || metric === 'delivery_rate') {
+                    // Higher is better
+                    best[metric] = Math.max(...values);
+                    worst[metric] = Math.min(...values);
+                } else {
+                    // Lower is better (latencies)
+                    best[metric] = Math.min(...values);
+                    worst[metric] = Math.max(...values);
+                }
+            });
+
+            // Build table
+            table.innerHTML = `
+                <thead>
+                    <tr>
+                        <th>Broker</th>
+                        <th>Throughput</th>
+                        <th>Delivery</th>
+                        <th>P50</th>
+                        <th>P95</th>
+                        <th>P99</th>
+                        <th>Mean</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${runResults.map(r => {
+                        const name = getRunDisplayName(r.run);
+                        const color = getRunColor(r.run);
+                        return `
+                            <tr>
+                                <td>
+                                    <div class="broker-name">
+                                        <div class="broker-color" style="background: ${color}"></div>
+                                        ${name}
+                                    </div>
+                                </td>
+                                <td class="${r.avg_recv_rate === best.avg_recv_rate ? 'best' : r.avg_recv_rate === worst.avg_recv_rate ? 'worst' : ''}">
+                                    ${formatNumber(r.avg_recv_rate)} msg/s
+                                </td>
+                                <td class="${r.delivery_rate === best.delivery_rate ? 'best' : r.delivery_rate === worst.delivery_rate ? 'worst' : ''}">
+                                    ${(r.delivery_rate * 100).toFixed(2)}%
+                                </td>
+                                <td class="${r.p50_ns === best.p50_ns ? 'best' : r.p50_ns === worst.p50_ns ? 'worst' : ''}">
+                                    ${formatLatency(r.p50_ns)}
+                                </td>
+                                <td class="${r.p95_ns === best.p95_ns ? 'best' : r.p95_ns === worst.p95_ns ? 'worst' : ''}">
+                                    ${formatLatency(r.p95_ns)}
+                                </td>
+                                <td class="${r.p99_ns === best.p99_ns ? 'best' : r.p99_ns === worst.p99_ns ? 'worst' : ''}">
+                                    ${formatLatency(r.p99_ns)}
+                                </td>
+                                <td class="${r.mean_ns === best.mean_ns ? 'best' : r.mean_ns === worst.mean_ns ? 'worst' : ''}">
+                                    ${formatLatency(r.mean_ns)}
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            `;
+        }
+
+        // Render charts
+        async function renderCharts() {
+            const container = document.getElementById('chartsGrid');
+
+            // Create chart panels - separate chart for each metric
+            container.innerHTML = `
+                <div class="chart-panel">
+                    <div class="chart-header">
+                        <span class="chart-title">Throughput (msg/s)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="throughputChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel">
+                    <div class="chart-header">
+                        <span class="chart-title">Delivery Rate (%)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="deliveryChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel">
+                    <div class="chart-header">
+                        <span class="chart-title">CPU Usage (%)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="cpuChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel">
+                    <div class="chart-header">
+                        <span class="chart-title">Memory Usage (MB)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="memoryChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel full-width">
+                    <div class="chart-header">
+                        <span class="chart-title">P99 Latency (ms)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="p99Chart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel full-width">
+                    <div class="chart-header">
+                        <span class="chart-title">P95 Latency (ms)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="p95Chart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel full-width">
+                    <div class="chart-header">
+                        <span class="chart-title">P50 Latency (ms)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="p50Chart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-panel full-width">
+                    <div class="chart-header">
+                        <span class="chart-title">Mean Latency (ms)</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="meanChart"></canvas>
+                    </div>
+                </div>
+            `;
+
+            // Destroy existing charts
+            Object.values(charts).forEach(chart => chart.destroy());
+            charts = {};
+
+            // Load data and create charts
+            await createThroughputChart();
+            await createDeliveryChart();
+            await createLatencyCharts();
+            await createContainerCharts();
+        }
+
+        // Create all latency charts (P99, P95, P50, Mean)
+        async function createLatencyCharts() {
+            // Load all latency data for each run
+            const runData = [];
+            for (const run of selectedRuns) {
+                const result = await conn.query(`
+                    SELECT rel_ns, p50_ns, p95_ns, p99_ns, mean_ns
+                    FROM benchdb.exact_percentiles
+                    WHERE scenario_id = '${run.scenario_id}'
+                    ORDER BY rel_ns
+                `);
+                runData.push({
+                    run,
+                    data: result.toArray()
+                });
+            }
+
+            // Helper to create a latency chart
+            function createChart(canvasId, metric, label) {
+                const datasets = runData.map(({ run, data }) => ({
+                    label: getRunDisplayName(run),
+                    data: data.map(row => ({
+                        x: Number(row.rel_ns) / 1e9,
+                        y: Number(row[metric]) / 1e6
+                    })),
+                    borderColor: getRunColor(run),
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3
+                }));
+
+                charts[canvasId] = new Chart(document.getElementById(canvasId), {
+                    type: 'line',
+                    data: { datasets },
+                    options: getChartOptions('Time (s)', label)
+                });
+            }
+
+            createChart('p99Chart', 'p99_ns', 'ms');
+            createChart('p95Chart', 'p95_ns', 'ms');
+            createChart('p50Chart', 'p50_ns', 'ms');
+            createChart('meanChart', 'mean_ns', 'ms');
+        }
+
+        // Create delivery rate chart
+        async function createDeliveryChart() {
+            const datasets = [];
+
+            for (const run of selectedRuns) {
+                const color = getRunColor(run);
+                const displayName = getRunDisplayName(run);
+
+                const result = await conn.query(`
+                    SELECT rel_ns, messages_sent, messages_recv
+                    FROM benchdb.throughput_counters
+                    WHERE scenario_id = '${run.scenario_id}'
+                    ORDER BY rel_ns
+                `);
+
+                const data = result.toArray();
+
+                // Calculate cumulative delivery rate over time
+                const deliveryData = data.map(row => {
+                    const sent = Number(row.messages_sent);
+                    const recv = Number(row.messages_recv);
+                    const rate = sent > 0 ? (recv / sent) * 100 : 0;
+                    return {
+                        x: Number(row.rel_ns) / 1e9,
+                        y: rate
+                    };
+                });
+
+                datasets.push({
+                    label: displayName,
+                    data: deliveryData,
+                    borderColor: color,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3
+                });
+            }
+
+            charts.delivery = new Chart(document.getElementById('deliveryChart'), {
+                type: 'line',
+                data: { datasets },
+                options: getChartOptions('Time (s)', '%')
+            });
+        }
+
+        // Create throughput chart
+        async function createThroughputChart() {
+            const datasets = [];
+
+            for (const run of selectedRuns) {
+                const color = getRunColor(run);
+                const displayName = getRunDisplayName(run);
+
+                const result = await conn.query(`
+                    SELECT rel_ns, messages_sent, messages_recv as messages_received
+                    FROM benchdb.throughput_counters
+                    WHERE scenario_id = '${run.scenario_id}'
+                    ORDER BY rel_ns
+                `);
+
+                const data = result.toArray();
+
+                // Calculate rates between samples
+                const rateData = [];
+                for (let j = 1; j < data.length; j++) {
+                    const dt = (Number(data[j].rel_ns) - Number(data[j-1].rel_ns)) / 1e9;
+                    const dRecv = Number(data[j].messages_received) - Number(data[j-1].messages_received);
+                    if (dt > 0) {
+                        rateData.push({
+                            x: Number(data[j].rel_ns) / 1e9,
+                            y: dRecv / dt
+                        });
+                    }
+                }
+
+                datasets.push({
+                    label: displayName,
+                    data: rateData,
+                    borderColor: color,
+                    backgroundColor: color + '20',
+                    fill: false,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3
+                });
+            }
+
+            charts.throughput = new Chart(document.getElementById('throughputChart'), {
+                type: 'line',
+                data: { datasets },
+                options: getChartOptions('Time (s)', 'Messages/s')
+            });
+        }
+
+        // Create container charts (overlay all runs)
+        async function createContainerCharts() {
+            const cpuDatasets = [];
+            const memoryDatasets = [];
+
+            for (const run of selectedRuns) {
+                const color = getRunColor(run);
+                const displayName = getRunDisplayName(run);
+
+                const result = await conn.query(`
+                    SELECT rel_ns, cpu_percent, memory_usage_bytes
+                    FROM benchdb.container_samples
+                    WHERE run_id = '${run.run_id}'
+                    ORDER BY rel_ns
+                `);
+
+                const data = result.toArray();
+
+                if (data.length === 0) continue;
+
+                // CPU dataset
+                cpuDatasets.push({
+                    label: displayName,
+                    data: data.map(row => ({
+                        x: Number(row.rel_ns) / 1e9,
+                        y: row.cpu_percent
+                    })),
+                    borderColor: color,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3
+                });
+
+                // Memory dataset
+                memoryDatasets.push({
+                    label: displayName,
+                    data: data.map(row => ({
+                        x: Number(row.rel_ns) / 1e9,
+                        y: Number(row.memory_usage_bytes) / 1e6
+                    })),
+                    borderColor: color,
+                    backgroundColor: 'transparent',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.3
+                });
+            }
+
+            // CPU chart
+            charts.cpu = new Chart(document.getElementById('cpuChart'), {
+                type: 'line',
+                data: { datasets: cpuDatasets },
+                options: getChartOptions('Time (s)', '%')
+            });
+
+            // Memory chart
+            charts.memory = new Chart(document.getElementById('memoryChart'), {
+                type: 'line',
+                data: { datasets: memoryDatasets },
+                options: getChartOptions('Time (s)', 'MB')
+            });
+        }
+
+        // Chart options
+        function getChartOptions(xLabel, yLabel) {
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            color: '#888899',
+                            font: { family: "'JetBrains Mono', monospace", size: 10 },
+                            boxWidth: 12,
+                            padding: 15
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: '#0d0d14',
+                        titleColor: '#e8e8f0',
+                        bodyColor: '#888899',
+                        borderColor: '#1a1a25',
+                        borderWidth: 1,
+                        titleFont: { family: "'JetBrains Mono', monospace" },
+                        bodyFont: { family: "'JetBrains Mono', monospace" },
+                        padding: 12
+                    }
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        title: {
+                            display: true,
+                            text: xLabel,
+                            color: '#555566',
+                            font: { family: "'JetBrains Mono', monospace", size: 10 }
+                        },
+                        grid: { color: '#1a1a25' },
+                        ticks: {
+                            color: '#555566',
+                            font: { family: "'JetBrains Mono', monospace", size: 10 }
+                        }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: yLabel,
+                            color: '#555566',
+                            font: { family: "'JetBrains Mono', monospace", size: 10 }
+                        },
+                        grid: { color: '#1a1a25' },
+                        ticks: {
+                            color: '#555566',
+                            font: { family: "'JetBrains Mono', monospace", size: 10 }
+                        }
+                    }
+                }
+            };
+        }
+
+        // Utility functions
+        function formatNumber(n) {
+            if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+            if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+            if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+            return n.toString();
+        }
+
+        function formatLatency(ns) {
+            if (ns >= 1e9) return (ns / 1e9).toFixed(2) + 's';
+            if (ns >= 1e6) return (ns / 1e6).toFixed(2) + 'ms';
+            if (ns >= 1e3) return (ns / 1e3).toFixed(2) + 'µs';
+            return ns + 'ns';
+        }
+
+        function setStatus(type, text) {
+            const dot = document.getElementById('statusDot');
+            const textEl = document.getElementById('statusText');
+
+            dot.className = 'status-dot';
+            if (type === 'loading') dot.classList.add('loading');
+            if (type === 'error') dot.classList.add('error');
+
+            textEl.textContent = text;
+        }
+
+        function showLoading(show) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (show) {
+                overlay.classList.add('visible');
+            } else {
+                overlay.classList.remove('visible');
+            }
+        }
+
+        // Event listeners
+        document.getElementById('dropZone').addEventListener('click', () => {
+            document.getElementById('fileInput').click();
+        });
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                loadDatabase(e.target.files[0]);
+            }
+        });
+
+        document.getElementById('dropZone').addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.currentTarget.classList.add('dragover');
+        });
+
+        document.getElementById('dropZone').addEventListener('dragleave', (e) => {
+            e.currentTarget.classList.remove('dragover');
+        });
+
+        document.getElementById('dropZone').addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.currentTarget.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                loadDatabase(e.dataTransfer.files[0]);
+            }
+        });
+
+        document.getElementById('filterScenario').addEventListener('change', updateSelectedRuns);
+        document.getElementById('filterQos').addEventListener('change', updateSelectedRuns);
+        document.getElementById('filterPublishers').addEventListener('change', updateSelectedRuns);
+        document.getElementById('filterSubscribers').addEventListener('change', updateSelectedRuns);
+        document.getElementById('filterRate').addEventListener('change', updateSelectedRuns);
+
+        // Tab click handlers
+        document.querySelectorAll('.tab').forEach(btn => {
+            btn.addEventListener('click', () => showTab(btn.dataset.tab));
+        });
+
+        // Auto-load database from server if available
+        async function tryAutoLoad() {
+            try {
+                const response = await fetch('/db', { method: 'HEAD' });
+                if (response.ok) {
+                    setStatus('loading', 'Auto-loading...');
+                    const dataResponse = await fetch('/db');
+                    if (dataResponse.ok) {
+                        const blob = await dataResponse.blob();
+                        const file = new File([blob], 'data.duckdb', { type: 'application/octet-stream' });
+                        await loadDatabase(file);
+                    }
+                }
+            } catch (e) {
+                // No database available on server, user will drop one
+                console.log('No database available from server');
+            }
+        }
+
+        // Try auto-load on page load
+        tryAutoLoad();
+    </script>
+</body>
+</html>

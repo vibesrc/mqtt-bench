@@ -1,0 +1,150 @@
+x-bench: &bench
+  restart: no
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  deploy:
+    resources:
+      limits:
+        cpus: "4"
+        memory: 8G
+      reservations:
+        cpus: "4"
+        memory: 8G
+  ports:
+    - 1883:1883
+  # network_mode: host
+  cpuset: "0-3"
+  mem_limit: 8G
+  oom_kill_disable: true
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    profiles: [mosquitto]
+    container_name: mosquitto_bench
+    volumes:
+      - ./config/unbounded/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    <<: *bench
+
+  emqx:
+    image: emqx/emqx:latest
+    profiles: ["emqx"]
+    container_name: emqx_bench
+    environment:
+      ###########
+      #  AUTH   #
+      ###########
+      - EMQX_LISTENERS__TCP__DEFAULT__AUTHN=none
+      - EMQX_LISTENERS__TCP__DEFAULT__AUTHZ=none
+
+      ##################################
+      #  DISABLE ALL UNNEEDED MODULES  #
+      ##################################
+      - EMQX_DASHBOARD__ENABLE=false
+      - EMQX_MGMT__ENABLE=false
+      - EMQX_RULE_ENGINE__ENABLE=false
+      - EMQX_TELEMETRY__ENABLE=false
+      - EMQX_STATS__ENABLE=false
+
+      # Disable WebSockets
+      - EMQX_LISTENERS__WS__DEFAULT__ENABLE=false
+      - EMQX_LISTENERS__WSS__DEFAULT__ENABLE=false
+
+      # Disable SSL listeners (leave only raw TCP)
+      - EMQX_LISTENERS__SSL__DEFAULT__ENABLE=false
+
+      # Disable Retainer
+      - EMQX_RETAINER__ENABLE=false
+
+      ################################
+      #  BROKER PERFORMANCE TUNING   #
+      ################################
+
+      # Accept more TCP workers
+      - EMQX_LISTENERS__TCP__DEFAULT__ACCEPTORS=64
+
+      # Disable logging or reduce to error-only
+      - EMQX_LOG__LEVEL=error
+      - EMQX_LOG__TO=console
+
+      # No persistence, RAM-only mnesia
+      - EMQX_MNESIA__BACKEND=rams
+
+      # MQTT tuning
+      - EMQX_MQTT__MAX_MQUEUE_LEN=100000
+      - EMQX_MQTT__MQUEUE_STORE_QOS0=true
+      - EMQX_MQTT__MAX_INFLIGHT=10000
+      - EMQX_MQTT__MAX_AWAITING_REL=10000
+
+      # Disable forced shutdown (mailbox killer)
+      - EMQX_FORCE_SHUTDOWN__ENABLE=false
+      - EMQX_FORCE_SHUTDOWN__MAX_MAILBOX_SIZE=100000
+      - EMQX_FORCE_SHUTDOWN__MAX_HEAP_SIZE=0
+
+      - EMQX_NODE__PROCESS_LIMIT=2000000
+      - EMQX_NODE__MAX_PORTS=1048576
+      - EMQX_OVERLOAD_PROTECTION__ENABLE=false
+
+      ########################
+      #  DISABLE CLUSTERING  #
+      ########################
+      - EMQX_CLUSTER__DISCOVERY=manual
+    <<: *bench
+
+  vibemq:
+    image: ghcr.io/vibesrc/vibemq:latest
+    container_name: vibemq_bench
+    profiles: [vibemq]
+    volumes:
+      - ./config/unbounded/vibemq.toml:/etc/vibemq/config.toml
+    <<: *bench
+
+  rawmq:
+    image: ghcr.io/vibesrc/rawmq:latest
+    container_name: rawmq_bench
+    profiles: [rawmq]
+    command: --config /app/config.toml
+    security_opt:
+      - no-new-privileges
+      - seccomp=unconfined
+    volumes:
+      - ./config/unbounded/rawmq.toml:/app/config.toml
+    <<: *bench
+
+  # nanomq:
+
+  vernemq:
+    container_name: bench_vernemq
+    image: vernemq/vernemq:latest
+    profiles: ["vernemq"]
+    ports:
+      - 1883:1883
+    environment:
+      # Required EULA acceptance
+      - DOCKER_VERNEMQ_ACCEPT_EULA=yes
+
+      ###########
+      #  AUTH   #
+      ###########
+      - DOCKER_VERNEMQ_ALLOW_ANONYMOUS=on
+
+      ###################################
+      #     BROKER PERFORMANCE TUNING   #
+      ###################################
+
+      # MQTT tuning - 0 means unlimited
+      # - DOCKER_VERNEMQ_MAX_INFLIGHT_MESSAGES=0
+      # - DOCKER_VERNEMQ_MAX_ONLINE_MESSAGES=-1
+      # - DOCKER_VERNEMQ_MAX_OFFLINE_MESSAGES=-1
+      # - DOCKER_VERNEMQ_RETRY_INTERVAL=30
+
+      # Logging - errors only
+      - DOCKER_VERNEMQ_LOG__CONSOLE__LEVEL=error
+
+      ###################################
+      #       DISABLE CLUSTERING        #
+      ###################################
+      - DOCKER_VERNEMQ_NODENAME=127.0.0.1
+    <<: *bench

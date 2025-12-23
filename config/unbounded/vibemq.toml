@@ -1,0 +1,6 @@
+[limits]
+max_connections = 10000
+max_inflight = 65535
+max_queued_messages = 65535
+max_awaiting_rel = 65535
+retry_interval = 30
