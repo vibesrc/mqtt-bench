@@ -1,17 +1,21 @@
-.PHONY: fan-in fan-out ui
+.PHONY: build fan-in fan-out ui
 
-DURATION ?= 60s
+DURATION ?= 10m
 QOS ?= 2
+TARGET_DIR ?= bin
 
-fan-in:
-	ulimit -n 20000 && cargo run --release -- run fan-in \
+build:
+	cargo build --release --target-dir $(TARGET_DIR)
+
+fan-in: build
+	ulimit -n 20000 && $(TARGET_DIR)/release/mqtt-bench run fan-in \
 		--duration $(DURATION) --qos $(QOS) \
 		--publishers 2000 --subscribers 100 --rate 10
 
-fan-out:
-	ulimit -n 20000 && cargo run --release -- run fan-out \
+fan-out: build
+	ulimit -n 20000 && $(TARGET_DIR)/release/mqtt-bench run fan-out \
 		--duration $(DURATION) --qos $(QOS) \
-		--publishers 100 --subscribers 2000 --rate 1
+		--publishers 100 --subscribers 3000 --rate 1
 
-ui:
-	cargo run --release serve
+ui: build
+	$(TARGET_DIR)/release/mqtt-bench serve

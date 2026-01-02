@@ -1658,6 +1658,7 @@ dependencies = [
  "hostname",
  "humantime",
  "indicatif",
+ "libc",
  "mime_guess",
  "num_cpus",
  "open",

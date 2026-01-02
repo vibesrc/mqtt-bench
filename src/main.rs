@@ -4,6 +4,7 @@ mod db;
 mod docker;
 mod metrics;
 mod output;
+mod process;
 mod scenarios;
 mod serve;
 
@@ -90,7 +91,7 @@ enum Commands {
         broker_version: Option<String>,
 
         /// Checkpoint interval for metrics aggregation
-        #[arg(long, default_value = "10s")]
+        #[arg(long, default_value = "1s")]
         checkpoint_interval: humantime::Duration,
 
         /// Docker stats collection interval (shorter = more accurate CPU/network stats)

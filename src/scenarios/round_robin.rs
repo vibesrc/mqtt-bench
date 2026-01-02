@@ -1,6 +1,7 @@
 use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
+use std::time::Duration;
 
 /// Round-robin scenario: Shared subscriptions for load balancing
 /// Requires MQTT 5.0 broker support
@@ -34,6 +35,7 @@ impl Scenario for RoundRobinScenario {
                 qos,
                 payload_size,
                 rate,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }
@@ -48,6 +50,7 @@ impl Scenario for RoundRobinScenario {
                 // $share/{ShareGroup}/{TopicFilter}
                 topic_filter: format!("$share/benchgroup/{}/#", TOPIC_PREFIX),
                 qos,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }

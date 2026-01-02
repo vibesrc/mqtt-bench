@@ -1,6 +1,7 @@
 use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
+use std::time::Duration;
 
 /// Fan-out scenario: Few publishers, many subscribers
 /// Simulates alert broadcast / market data feed
@@ -35,6 +36,7 @@ impl Scenario for FanOutScenario {
                 qos,
                 payload_size,
                 rate,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }
@@ -48,6 +50,7 @@ impl Scenario for FanOutScenario {
                 // All subscribers subscribe to all topics using multi-level wildcard
                 topic_filter: format!("{}/#", TOPIC_PREFIX),
                 qos,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }

@@ -1,6 +1,7 @@
 use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
+use std::time::Duration;
 
 /// Straight-run scenario: Equal publishers/subscribers with 1:1 topic mapping
 /// Simulates point-to-point messaging
@@ -33,6 +34,7 @@ impl Scenario for StraightRunScenario {
                 qos,
                 payload_size,
                 rate,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }
@@ -46,6 +48,7 @@ impl Scenario for StraightRunScenario {
                 // Subscriber N subscribes exclusively to topic N
                 topic_filter: format!("{}/{}", TOPIC_PREFIX, i),
                 qos,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }

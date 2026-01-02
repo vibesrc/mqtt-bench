@@ -1,6 +1,7 @@
 use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
+use std::time::Duration;
 
 /// Fan-in scenario: Many publishers, few subscribers
 /// Simulates IoT sensor ingestion where many devices publish to grouped topics
@@ -44,6 +45,7 @@ impl Scenario for FanInScenario {
                     qos,
                     payload_size,
                     rate,
+                    connect_timeout: Duration::from_secs(25), // Shorter than bench timeout (30s)
                 }
             })
             .collect()
@@ -58,6 +60,7 @@ impl Scenario for FanInScenario {
                 // Subscribe to this subscriber's group using single-level wildcard
                 topic_filter: format!("{}/group-{}/+", TOPIC_PREFIX, i),
                 qos,
+                connect_timeout: Duration::from_secs(25),
             })
             .collect()
     }

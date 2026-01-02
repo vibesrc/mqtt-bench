@@ -49,6 +49,7 @@ humantime = "2"
 futures = "0.3"
 hostname = "0.4"
 num_cpus = "1"
+libc = "0.2"
 
 # Web server for viewer
 axum = "0.7"
