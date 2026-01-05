@@ -1,4 +1,4 @@
-use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
+use super::{Scenario, ScenarioParams};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
 use std::time::Duration;
@@ -23,16 +23,18 @@ impl Scenario for FanOutScenario {
         qos: QoS,
         rate: u32,
         payload_size: usize,
+        client_prefix: &str,
+        base_topic: &str,
     ) -> Vec<PublisherConfig> {
         (0..self.params.publishers)
             .map(|i| PublisherConfig {
-                client_id: format!("mqtt-bench-pub-{}", i),
+                client_id: format!("{}-pub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // Publishers cycle through all topics
                 // Topic selection happens at publish time based on message count
                 // For simplicity, we'll use a fixed topic per publisher that cycles
-                topic: format!("{}/{}", TOPIC_PREFIX, i % self.params.topics),
+                topic: format!("{}/{}", base_topic, i % self.params.topics),
                 qos,
                 payload_size,
                 rate,
@@ -41,14 +43,14 @@ impl Scenario for FanOutScenario {
             .collect()
     }
 
-    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS) -> Vec<SubscriberConfig> {
+    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS, client_prefix: &str, base_topic: &str) -> Vec<SubscriberConfig> {
         (0..self.params.subscribers)
             .map(|i| SubscriberConfig {
-                client_id: format!("mqtt-bench-sub-{}", i),
+                client_id: format!("{}-sub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // All subscribers subscribe to all topics using multi-level wildcard
-                topic_filter: format!("{}/#", TOPIC_PREFIX),
+                topic_filter: format!("{}/#", base_topic),
                 qos,
                 connect_timeout: Duration::from_secs(25),
             })

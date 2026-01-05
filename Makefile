@@ -8,14 +8,16 @@ build:
 	cargo build --release --target-dir $(TARGET_DIR)
 
 fan-in: build
-	ulimit -n 20000 && $(TARGET_DIR)/release/mqtt-bench run fan-in \
+	$(TARGET_DIR)/release/mqtt-bench --db ./fan-in.duckdb \
+	  run fan-in --client-prefix fanin --base-topic bench/fanin \
 		--duration $(DURATION) --qos $(QOS) \
-		--publishers 2000 --subscribers 100 --rate 10
+		--publishers 1500 --subscribers 100 --rate 10
 
 fan-out: build
-	ulimit -n 20000 && $(TARGET_DIR)/release/mqtt-bench run fan-out \
+	$(TARGET_DIR)/release/mqtt-bench --db ./fan-out.duckdb \
+	  run fan-out --client-prefix fanout --base-topic bench/fanout \
 		--duration $(DURATION) --qos $(QOS) \
-		--publishers 100 --subscribers 3000 --rate 1
+		--publishers 100 --subscribers 1500 --rate 1
 
 ui: build
 	$(TARGET_DIR)/release/mqtt-bench serve

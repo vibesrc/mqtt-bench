@@ -1,4 +1,4 @@
-use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
+use super::{Scenario, ScenarioParams};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
 use std::time::Duration;
@@ -23,14 +23,16 @@ impl Scenario for StraightRunScenario {
         qos: QoS,
         rate: u32,
         payload_size: usize,
+        client_prefix: &str,
+        base_topic: &str,
     ) -> Vec<PublisherConfig> {
         (0..self.params.publishers)
             .map(|i| PublisherConfig {
-                client_id: format!("mqtt-bench-pub-{}", i),
+                client_id: format!("{}-pub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // Publisher N publishes exclusively to topic N
-                topic: format!("{}/{}", TOPIC_PREFIX, i),
+                topic: format!("{}/{}", base_topic, i),
                 qos,
                 payload_size,
                 rate,
@@ -39,14 +41,14 @@ impl Scenario for StraightRunScenario {
             .collect()
     }
 
-    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS) -> Vec<SubscriberConfig> {
+    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS, client_prefix: &str, base_topic: &str) -> Vec<SubscriberConfig> {
         (0..self.params.subscribers)
             .map(|i| SubscriberConfig {
-                client_id: format!("mqtt-bench-sub-{}", i),
+                client_id: format!("{}-sub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // Subscriber N subscribes exclusively to topic N
-                topic_filter: format!("{}/{}", TOPIC_PREFIX, i),
+                topic_filter: format!("{}/{}", base_topic, i),
                 qos,
                 connect_timeout: Duration::from_secs(25),
             })

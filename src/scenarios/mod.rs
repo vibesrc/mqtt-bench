@@ -7,9 +7,6 @@ use crate::client::{PublisherConfig, SubscriberConfig};
 use crate::ScenarioType;
 use rumqttc::QoS;
 
-/// Topic prefix for benchmark messages
-pub const TOPIC_PREFIX: &str = "bench/topic";
-
 /// Trait for benchmark scenarios
 #[allow(dead_code)]
 pub trait Scenario {
@@ -21,10 +18,12 @@ pub trait Scenario {
         qos: QoS,
         rate: u32,
         payload_size: usize,
+        client_prefix: &str,
+        base_topic: &str,
     ) -> Vec<PublisherConfig>;
 
     /// Get subscriber configurations for this scenario
-    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS) -> Vec<SubscriberConfig>;
+    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS, client_prefix: &str, base_topic: &str) -> Vec<SubscriberConfig>;
 
     /// Calculate expected messages for delivery rate calculation
     fn expected_messages(&self, rate: u32, duration_secs: u64) -> u64;

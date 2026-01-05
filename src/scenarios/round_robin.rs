@@ -1,4 +1,4 @@
-use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
+use super::{Scenario, ScenarioParams};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
 use std::time::Duration;
@@ -24,14 +24,16 @@ impl Scenario for RoundRobinScenario {
         qos: QoS,
         rate: u32,
         payload_size: usize,
+        client_prefix: &str,
+        base_topic: &str,
     ) -> Vec<PublisherConfig> {
         (0..self.params.publishers)
             .map(|i| PublisherConfig {
-                client_id: format!("mqtt-bench-pub-{}", i),
+                client_id: format!("{}-pub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // All publishers cycle through all topics
-                topic: format!("{}/{}", TOPIC_PREFIX, i % self.params.topics),
+                topic: format!("{}/{}", base_topic, i % self.params.topics),
                 qos,
                 payload_size,
                 rate,
@@ -40,15 +42,15 @@ impl Scenario for RoundRobinScenario {
             .collect()
     }
 
-    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS) -> Vec<SubscriberConfig> {
+    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS, client_prefix: &str, base_topic: &str) -> Vec<SubscriberConfig> {
         (0..self.params.subscribers)
             .map(|i| SubscriberConfig {
-                client_id: format!("mqtt-bench-sub-{}", i),
+                client_id: format!("{}-sub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // All subscribers use shared subscription for load balancing
                 // $share/{ShareGroup}/{TopicFilter}
-                topic_filter: format!("$share/benchgroup/{}/#", TOPIC_PREFIX),
+                topic_filter: format!("$share/benchgroup/{}/#", base_topic),
                 qos,
                 connect_timeout: Duration::from_secs(25),
             })

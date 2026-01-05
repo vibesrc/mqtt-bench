@@ -1,4 +1,4 @@
-use super::{Scenario, ScenarioParams, TOPIC_PREFIX};
+use super::{Scenario, ScenarioParams};
 use crate::client::{PublisherConfig, SubscriberConfig};
 use rumqttc::QoS;
 use std::time::Duration;
@@ -29,6 +29,8 @@ impl Scenario for FanInScenario {
         qos: QoS,
         rate: u32,
         payload_size: usize,
+        client_prefix: &str,
+        base_topic: &str,
     ) -> Vec<PublisherConfig> {
         // Number of groups = number of subscribers (each subscriber handles one group)
         let num_groups = self.params.subscribers;
@@ -38,10 +40,10 @@ impl Scenario for FanInScenario {
                 // Distribute publishers across groups round-robin
                 let group_id = i % num_groups;
                 PublisherConfig {
-                    client_id: format!("mqtt-bench-pub-{}", i),
+                    client_id: format!("{}-pub-{}", client_prefix, i),
                     host: host.to_string(),
                     port,
-                    topic: format!("{}/group-{}/sensor-{}", TOPIC_PREFIX, group_id, i),
+                    topic: format!("{}/group-{}/sensor-{}", base_topic, group_id, i),
                     qos,
                     payload_size,
                     rate,
@@ -51,14 +53,14 @@ impl Scenario for FanInScenario {
             .collect()
     }
 
-    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS) -> Vec<SubscriberConfig> {
+    fn subscriber_configs(&self, host: &str, port: u16, qos: QoS, client_prefix: &str, base_topic: &str) -> Vec<SubscriberConfig> {
         (0..self.params.subscribers)
             .map(|i| SubscriberConfig {
-                client_id: format!("mqtt-bench-sub-{}", i),
+                client_id: format!("{}-sub-{}", client_prefix, i),
                 host: host.to_string(),
                 port,
                 // Subscribe to this subscriber's group using single-level wildcard
-                topic_filter: format!("{}/group-{}/+", TOPIC_PREFIX, i),
+                topic_filter: format!("{}/group-{}/+", base_topic, i),
                 qos,
                 connect_timeout: Duration::from_secs(25),
             })

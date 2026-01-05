@@ -105,6 +105,14 @@ enum Commands {
         /// Notes for this benchmark run
         #[arg(long)]
         notes: Option<String>,
+
+        /// Client ID prefix (default: mqtt-bench)
+        #[arg(long, default_value = "mqtt-bench")]
+        client_prefix: String,
+
+        /// Base topic prefix for MQTT messages (default: bench/topic)
+        #[arg(long, default_value = "bench/topic")]
+        base_topic: String,
     },
 
     /// Export benchmark results
@@ -215,6 +223,8 @@ async fn main() -> Result<()> {
             stats_interval,
             timeout,
             notes,
+            client_prefix,
+            base_topic,
         } => {
             let config = bench::BenchmarkConfig {
                 scenario,
@@ -235,6 +245,8 @@ async fn main() -> Result<()> {
                 stats_interval: stats_interval.into(),
                 timeout: timeout.into(),
                 notes,
+                client_prefix,
+                base_topic,
             };
 
             let orchestrator = bench::Orchestrator::new(db, config);

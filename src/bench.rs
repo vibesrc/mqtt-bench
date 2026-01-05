@@ -94,6 +94,8 @@ pub struct BenchmarkConfig {
     pub stats_interval: Duration,
     pub timeout: Duration,
     pub notes: Option<String>,
+    pub client_prefix: String,
+    pub base_topic: String,
 }
 
 /// Benchmark orchestrator
@@ -301,8 +303,10 @@ impl Orchestrator {
             qos,
             self.config.rate,
             self.config.payload_size as usize,
+            &self.config.client_prefix,
+            &self.config.base_topic,
         );
-        let sub_configs = scenario.subscriber_configs(&self.config.host, self.config.port, qos);
+        let sub_configs = scenario.subscriber_configs(&self.config.host, self.config.port, qos, &self.config.client_prefix, &self.config.base_topic);
 
         let num_publishers = pub_configs.len();
         let num_subscribers = sub_configs.len();
