@@ -80,17 +80,125 @@ impl Publisher {
     }
 
     pub async fn run(self) -> Result<()> {
-        self.metrics.counters.inc_connection_attempt();
+        // Pre-allocate payload buffer
+        let mut payload = vec![0u8; self.config.payload_size];
 
-        // Connection retry loop
+        // Calculate interval between messages
+        let interval_duration = if self.config.rate > 0 {
+            Duration::from_secs_f64(1.0 / self.config.rate as f64)
+        } else {
+            Duration::from_secs(1)
+        };
+
+        let mut is_first_connect = true;
+
+        // Outer reconnection loop
+        'reconnect: loop {
+            if self.stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
+            // Connect with retry
+            let (client, mut eventloop) = match self.connect(is_first_connect).await {
+                Some(conn) => conn,
+                None => return Ok(()), // Connection permanently failed or stopped
+            };
+            is_first_connect = false;
+
+            let mut publish_interval = interval(interval_duration);
+            publish_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            // Combined publish and event loop
+            loop {
+                if self.stop.load(Ordering::Relaxed) {
+                    let _ = client.disconnect().await;
+                    return Ok(());
+                }
+
+                tokio::select! {
+                    // Handle MQTT events
+                    event = eventloop.poll() => {
+                        match event {
+                            Ok(Event::Incoming(Packet::PubAck(_))) => {
+                                self.metrics.counters.inc_acked();
+                            }
+                            Ok(Event::Incoming(Packet::PubComp(_))) => {
+                                self.metrics.counters.inc_acked();
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                if !self.stop.load(Ordering::Relaxed) {
+                                    debug!(
+                                        client_id = %self.config.client_id,
+                                        error = %e,
+                                        "Publisher disconnected, will reconnect"
+                                    );
+                                    self.metrics.counters.inc_errors();
+                                    continue 'reconnect;
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
+                    // Publish on interval
+                    _ = publish_interval.tick() => {
+                        // Embed current timestamp
+                        embed_timestamp(&mut payload);
+
+                        // Fill rest with random data
+                        if self.config.payload_size > 8 {
+                            rand::Rng::fill(&mut rand::thread_rng(), &mut payload[8..]);
+                        }
+
+                        match client
+                            .publish(&self.config.topic, self.config.qos, false, payload.clone())
+                            .await
+                        {
+                            Ok(_) => {
+                                self.metrics.counters.inc_sent(self.config.payload_size as u64);
+                                trace!(
+                                    client_id = %self.config.client_id,
+                                    topic = %self.config.topic,
+                                    "Published message"
+                                );
+                            }
+                            Err(e) => {
+                                self.metrics.counters.inc_errors();
+                                debug!(
+                                    client_id = %self.config.client_id,
+                                    error = %e,
+                                    "Failed to publish"
+                                );
+                                // Channel error likely means disconnected
+                                if e.to_string().contains("Channel") {
+                                    continue 'reconnect;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Connect to broker with retry logic
+    async fn connect(&self, is_first: bool) -> Option<(AsyncClient, EventLoop)> {
+        if is_first {
+            self.metrics.counters.inc_connection_attempt();
+        } else {
+            self.metrics.counters.inc_reconnection();
+        }
+
         let connect_start = Instant::now();
         let mut retry_delay = INITIAL_RETRY_DELAY;
         let mut attempt = 0u32;
 
-        let (client, eventloop_handle) = loop {
+        loop {
             if self.stop.load(Ordering::Relaxed) {
-                self.metrics.counters.inc_connection_failed();
-                return Ok(());
+                if is_first {
+                    self.metrics.counters.inc_connection_failed();
+                }
+                return None;
             }
 
             attempt += 1;
@@ -105,47 +213,43 @@ impl Publisher {
 
             let (client, mut eventloop) = AsyncClient::new(options, 1000);
 
-            // Try to connect by polling until we get ConnAck or error
             match Self::try_connect(&mut eventloop, &self.stop).await {
                 Ok(true) => {
-                    self.metrics.counters.inc_connection_success();
-                    debug!(client_id = %self.config.client_id, attempts = attempt, "Publisher connected");
-
-                    // Spawn event loop handler for ongoing events
-                    let stop = self.stop.clone();
-                    let metrics = self.metrics.clone();
-                    let client_id = self.config.client_id.clone();
-                    let handle = tokio::spawn(async move {
-                        Self::handle_events(&mut eventloop, &metrics, &stop, client_id).await
-                    });
-
-                    break (client, handle);
+                    if is_first {
+                        self.metrics.counters.inc_connection_success();
+                        debug!(client_id = %self.config.client_id, attempts = attempt, "Publisher connected");
+                    } else {
+                        debug!(client_id = %self.config.client_id, attempts = attempt, "Publisher reconnected");
+                    }
+                    return Some((client, eventloop));
                 }
                 Ok(false) => {
-                    // Connection rejected by broker - don't retry
-                    self.metrics.counters.inc_connection_failed();
+                    if is_first {
+                        self.metrics.counters.inc_connection_failed();
+                    }
                     warn!(client_id = %self.config.client_id, "Publisher connection rejected by broker");
-                    return Ok(());
+                    return None;
                 }
                 Err(e) => {
                     let elapsed = connect_start.elapsed();
                     if elapsed >= self.config.connect_timeout {
-                        self.metrics.counters.inc_connection_failed();
-                        let err_str = e.to_string();
-                        if err_str.contains("Too many open files") {
-                            warn!(client_id = %self.config.client_id, "Connection failed: Too many open files. Try: ulimit -n 65535");
-                        } else {
-                            debug!(
-                                client_id = %self.config.client_id,
-                                attempts = attempt,
-                                elapsed = ?elapsed,
-                                "Publisher connection failed after retries"
-                            );
+                        if is_first {
+                            self.metrics.counters.inc_connection_failed();
+                            let err_str = e.to_string();
+                            if err_str.contains("Too many open files") {
+                                warn!(client_id = %self.config.client_id, "Connection failed: Too many open files. Try: ulimit -n 65535");
+                            } else {
+                                debug!(
+                                    client_id = %self.config.client_id,
+                                    attempts = attempt,
+                                    elapsed = ?elapsed,
+                                    "Publisher connection failed after retries"
+                                );
+                            }
                         }
-                        return Ok(());
+                        return None;
                     }
 
-                    // Exponential backoff
                     debug!(
                         client_id = %self.config.client_id,
                         attempt = attempt,
@@ -157,68 +261,10 @@ impl Publisher {
                     retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
                 }
             }
-        };
-
-        // Pre-allocate payload buffer
-        let mut payload = vec![0u8; self.config.payload_size];
-
-        // Calculate interval between messages
-        let interval_duration = if self.config.rate > 0 {
-            Duration::from_secs_f64(1.0 / self.config.rate as f64)
-        } else {
-            Duration::from_secs(1)
-        };
-
-        let mut publish_interval = interval(interval_duration);
-        publish_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        // Main publish loop
-        while !self.stop.load(Ordering::Relaxed) {
-            publish_interval.tick().await;
-
-            if self.stop.load(Ordering::Relaxed) {
-                break;
-            }
-
-            // Embed current timestamp
-            embed_timestamp(&mut payload);
-
-            // Fill rest with random data (optional, but more realistic)
-            if self.config.payload_size > 8 {
-                rand::Rng::fill(&mut rand::thread_rng(), &mut payload[8..]);
-            }
-
-            match client
-                .publish(&self.config.topic, self.config.qos, false, payload.clone())
-                .await
-            {
-                Ok(_) => {
-                    self.metrics.counters.inc_sent(self.config.payload_size as u64);
-                    trace!(
-                        client_id = %self.config.client_id,
-                        topic = %self.config.topic,
-                        "Published message"
-                    );
-                }
-                Err(e) => {
-                    self.metrics.counters.inc_errors();
-                    debug!(
-                        client_id = %self.config.client_id,
-                        error = %e,
-                        "Failed to publish"
-                    );
-                }
-            }
         }
-
-        // Disconnect gracefully
-        let _ = client.disconnect().await;
-        eventloop_handle.abort();
-
-        Ok(())
     }
 
-    /// Try to establish initial connection, returns Ok(true) if connected,
+    /// Try to establish connection, returns Ok(true) if connected,
     /// Ok(false) if rejected by broker, Err if connection failed
     async fn try_connect(
         eventloop: &mut EventLoop,
@@ -226,7 +272,6 @@ impl Publisher {
     ) -> Result<bool, rumqttc::ConnectionError> {
         loop {
             if stop.load(Ordering::Relaxed) {
-                // Return IO error to signal cancellation
                 return Err(rumqttc::ConnectionError::Io(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
                     "stopped",
@@ -239,36 +284,6 @@ impl Publisher {
                 }
                 Ok(_) => continue,
                 Err(e) => return Err(e),
-            }
-        }
-    }
-
-    async fn handle_events(
-        eventloop: &mut EventLoop,
-        metrics: &MetricsCollector,
-        stop: &Arc<AtomicBool>,
-        client_id: String,
-    ) {
-        loop {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-
-            match eventloop.poll().await {
-                Ok(Event::Incoming(Packet::PubAck(_))) => {
-                    metrics.counters.inc_acked();
-                }
-                Ok(Event::Incoming(Packet::PubComp(_))) => {
-                    metrics.counters.inc_acked();
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    if !stop.load(Ordering::Relaxed) {
-                        debug!(client_id = %client_id, error = %e, "Publisher disconnected");
-                        metrics.counters.inc_errors();
-                    }
-                    break;
-                }
             }
         }
     }
@@ -306,17 +321,101 @@ impl Subscriber {
     }
 
     pub async fn run(self) -> Result<()> {
-        self.metrics.counters.inc_connection_attempt();
+        let mut is_first_connect = true;
 
-        // Connection retry loop
+        // Outer reconnection loop
+        'reconnect: loop {
+            if self.stop.load(Ordering::Relaxed) {
+                return Ok(());
+            }
+
+            // Connect with retry
+            let (client, mut eventloop) = match self.connect(is_first_connect).await {
+                Some(conn) => conn,
+                None => return Ok(()), // Connection permanently failed or stopped
+            };
+            is_first_connect = false;
+
+            // Subscribe to topics
+            if let Err(e) = client
+                .subscribe(&self.config.topic_filter, self.config.qos)
+                .await
+            {
+                warn!(
+                    client_id = %self.config.client_id,
+                    error = %e,
+                    "Failed to subscribe"
+                );
+            }
+
+            // Main event loop - handle messages
+            loop {
+                if self.stop.load(Ordering::Relaxed) {
+                    let _ = client.disconnect().await;
+                    return Ok(());
+                }
+
+                match eventloop.poll().await {
+                    Ok(Event::Incoming(Packet::SubAck(_))) => {
+                        debug!(
+                            client_id = %self.config.client_id,
+                            topic = %self.config.topic_filter,
+                            "Subscribed"
+                        );
+                    }
+                    Ok(Event::Incoming(Packet::Publish(publish))) => {
+                        let payload = &publish.payload;
+                        let payload_len = payload.len() as u64;
+
+                        // Calculate and record latency
+                        if let Some(latency_ns) = calculate_latency_ns(payload) {
+                            self.metrics.record_latency(latency_ns);
+                            trace!(
+                                client_id = %self.config.client_id,
+                                topic = %publish.topic,
+                                latency_us = latency_ns / 1000,
+                                "Received message"
+                            );
+                        }
+
+                        self.metrics.counters.inc_received(payload_len);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        if !self.stop.load(Ordering::Relaxed) {
+                            debug!(
+                                client_id = %self.config.client_id,
+                                error = %e,
+                                "Subscriber disconnected, will reconnect"
+                            );
+                            self.metrics.counters.inc_errors();
+                            continue 'reconnect;
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Connect to broker with retry logic
+    async fn connect(&self, is_first: bool) -> Option<(AsyncClient, EventLoop)> {
+        if is_first {
+            self.metrics.counters.inc_connection_attempt();
+        } else {
+            self.metrics.counters.inc_reconnection();
+        }
+
         let connect_start = Instant::now();
         let mut retry_delay = INITIAL_RETRY_DELAY;
         let mut attempt = 0u32;
 
-        let (client, mut eventloop) = loop {
+        loop {
             if self.stop.load(Ordering::Relaxed) {
-                self.metrics.counters.inc_connection_failed();
-                return Ok(());
+                if is_first {
+                    self.metrics.counters.inc_connection_failed();
+                }
+                return None;
             }
 
             attempt += 1;
@@ -331,38 +430,43 @@ impl Subscriber {
 
             let (client, mut eventloop) = AsyncClient::new(options, 10000);
 
-            // Try to connect by polling until we get ConnAck or error
             match Self::try_connect(&mut eventloop, &self.stop).await {
                 Ok(true) => {
-                    self.metrics.counters.inc_connection_success();
-                    debug!(client_id = %self.config.client_id, attempts = attempt, "Subscriber connected");
-                    break (client, eventloop);
+                    if is_first {
+                        self.metrics.counters.inc_connection_success();
+                        debug!(client_id = %self.config.client_id, attempts = attempt, "Subscriber connected");
+                    } else {
+                        debug!(client_id = %self.config.client_id, attempts = attempt, "Subscriber reconnected");
+                    }
+                    return Some((client, eventloop));
                 }
                 Ok(false) => {
-                    // Connection rejected by broker - don't retry
-                    self.metrics.counters.inc_connection_failed();
+                    if is_first {
+                        self.metrics.counters.inc_connection_failed();
+                    }
                     warn!(client_id = %self.config.client_id, "Subscriber connection rejected by broker");
-                    return Ok(());
+                    return None;
                 }
                 Err(e) => {
                     let elapsed = connect_start.elapsed();
                     if elapsed >= self.config.connect_timeout {
-                        self.metrics.counters.inc_connection_failed();
-                        let err_str = e.to_string();
-                        if err_str.contains("Too many open files") {
-                            warn!(client_id = %self.config.client_id, "Connection failed: Too many open files. Try: ulimit -n 65535");
-                        } else {
-                            debug!(
-                                client_id = %self.config.client_id,
-                                attempts = attempt,
-                                elapsed = ?elapsed,
-                                "Subscriber connection failed after retries"
-                            );
+                        if is_first {
+                            self.metrics.counters.inc_connection_failed();
+                            let err_str = e.to_string();
+                            if err_str.contains("Too many open files") {
+                                warn!(client_id = %self.config.client_id, "Connection failed: Too many open files. Try: ulimit -n 65535");
+                            } else {
+                                debug!(
+                                    client_id = %self.config.client_id,
+                                    attempts = attempt,
+                                    elapsed = ?elapsed,
+                                    "Subscriber connection failed after retries"
+                                );
+                            }
                         }
-                        return Ok(());
+                        return None;
                     }
 
-                    // Exponential backoff
                     debug!(
                         client_id = %self.config.client_id,
                         attempt = attempt,
@@ -374,69 +478,10 @@ impl Subscriber {
                     retry_delay = (retry_delay * 2).min(MAX_RETRY_DELAY);
                 }
             }
-        };
-
-        // Subscribe to topics
-        if let Err(e) = client
-            .subscribe(&self.config.topic_filter, self.config.qos)
-            .await
-        {
-            warn!(
-                client_id = %self.config.client_id,
-                error = %e,
-                "Failed to subscribe"
-            );
         }
-
-        // Main event loop - handle messages
-        while !self.stop.load(Ordering::Relaxed) {
-            match eventloop.poll().await {
-                Ok(Event::Incoming(Packet::SubAck(_))) => {
-                    debug!(
-                        client_id = %self.config.client_id,
-                        topic = %self.config.topic_filter,
-                        "Subscribed"
-                    );
-                }
-                Ok(Event::Incoming(Packet::Publish(publish))) => {
-                    let payload = &publish.payload;
-                    let payload_len = payload.len() as u64;
-
-                    // Calculate and record latency (updates both bucket and HDR histograms)
-                    if let Some(latency_ns) = calculate_latency_ns(payload) {
-                        self.metrics.record_latency(latency_ns);
-                        trace!(
-                            client_id = %self.config.client_id,
-                            topic = %publish.topic,
-                            latency_us = latency_ns / 1000,
-                            "Received message"
-                        );
-                    }
-
-                    self.metrics.counters.inc_received(payload_len);
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    if !self.stop.load(Ordering::Relaxed) {
-                        debug!(
-                            client_id = %self.config.client_id,
-                            error = %e,
-                            "Subscriber disconnected"
-                        );
-                        self.metrics.counters.inc_errors();
-                    }
-                    break;
-                }
-            }
-        }
-
-        // Disconnect gracefully
-        let _ = client.disconnect().await;
-
-        Ok(())
     }
 
-    /// Try to establish initial connection, returns Ok(true) if connected,
+    /// Try to establish connection, returns Ok(true) if connected,
     /// Ok(false) if rejected by broker, Err if connection failed
     async fn try_connect(
         eventloop: &mut EventLoop,
@@ -444,7 +489,6 @@ impl Subscriber {
     ) -> Result<bool, rumqttc::ConnectionError> {
         loop {
             if stop.load(Ordering::Relaxed) {
-                // Return IO error to signal cancellation
                 return Err(rumqttc::ConnectionError::Io(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
                     "stopped",

@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use output::ExportFormat;
 use std::path::PathBuf;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "mqtt-bench")]
@@ -187,17 +188,44 @@ impl std::fmt::Display for ScenarioType {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing
-    let filter = match cli.verbose {
+    // Determine console filter based on verbosity
+    let console_filter = match cli.verbose {
         0 => "mqtt_bench=info",
         1 => "mqtt_bench=debug",
         _ => "mqtt_bench=trace,rumqttc=debug",
     };
 
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)))
-        .init();
+    // Check if this is a Run command - if so, set up file logging
+    let run_id = if matches!(cli.command, Commands::Run { .. }) {
+        Some(Uuid::new_v4())
+    } else {
+        None
+    };
+
+    // Initialize tracing with optional file logging
+    if let Some(rid) = run_id {
+        let log_file = std::fs::File::create(format!("{}.log", rid))?;
+
+        // Console layer: respects verbosity
+        let console_layer = fmt::layer()
+            .with_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(console_filter)));
+
+        // File layer: always debug level
+        let file_layer = fmt::layer()
+            .with_writer(log_file)
+            .with_ansi(false)
+            .with_filter(EnvFilter::new("mqtt_bench=debug"));
+
+        tracing_subscriber::registry()
+            .with(console_layer)
+            .with(file_layer)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(fmt::layer())
+            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(console_filter)))
+            .init();
+    }
 
     // Initialize database
     let db = db::Database::open(&cli.db)?;
@@ -227,6 +255,7 @@ async fn main() -> Result<()> {
             base_topic,
         } => {
             let config = bench::BenchmarkConfig {
+                run_id: run_id.expect("run_id should be set for Run command"),
                 scenario,
                 host,
                 port,

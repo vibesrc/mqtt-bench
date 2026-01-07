@@ -79,6 +79,7 @@ pub struct Counters {
     pub connections_attempted: AtomicU64,
     pub connections_succeeded: AtomicU64,
     pub connections_failed: AtomicU64,
+    pub reconnections: AtomicU64,
 }
 
 impl Counters {
@@ -130,6 +131,10 @@ impl Counters {
 
     pub fn inc_connection_failed(&self) {
         self.connections_failed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_reconnection(&self) {
+        self.reconnections.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn reset(&self) {

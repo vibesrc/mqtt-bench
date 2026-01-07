@@ -76,6 +76,7 @@ impl ContainerStatsState {
 
 /// Benchmark configuration
 pub struct BenchmarkConfig {
+    pub run_id: Uuid,
     pub scenario: ScenarioType,
     pub host: String,
     pub port: u16,
@@ -110,7 +111,7 @@ impl Orchestrator {
     }
 
     pub async fn run(self) -> Result<()> {
-        let run_id = Uuid::new_v4();
+        let run_id = self.config.run_id;
         let scenario_id = Uuid::new_v4();
         let started_at = Utc::now();
 
@@ -285,10 +286,6 @@ impl Orchestrator {
         let container_stats_clone = container_stats.clone();
         let stats_receiver = tokio::spawn(async move {
             while let Some(sample) = stats_rx.recv().await {
-                debug!(
-                    memory_mb = %(sample.memory_usage_bytes / 1_000_000),
-                    "Container stats"
-                );
                 container_stats_clone.push(sample);
             }
         });
@@ -724,6 +721,7 @@ impl Orchestrator {
         let conn_attempted = metrics.counters.connections_attempted.load(Ordering::Acquire);
         let conn_succeeded = metrics.counters.connections_succeeded.load(Ordering::Acquire);
         let conn_failed = metrics.counters.connections_failed.load(Ordering::Acquire);
+        let reconnections = metrics.counters.reconnections.load(Ordering::Acquire);
 
         println!("  CONNECTIONS");
         println!("  ──────────────────────────────────────────────────────────────");
@@ -733,6 +731,9 @@ impl Orchestrator {
             println!("  Failed:            {:>12}  ⚠", conn_failed);
         } else {
             println!("  Failed:            {:>12}", conn_failed);
+        }
+        if reconnections > 0 {
+            println!("  Reconnections:     {:>12}", reconnections);
         }
         println!();
         println!("  THROUGHPUT");
