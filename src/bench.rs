@@ -449,6 +449,7 @@ impl Orchestrator {
         }
         metrics.reset();
         metrics.reset_start_time();
+        metrics.set_measurement_start();
 
         // Measurement phase (skip if interrupted during warmup)
         let measurement_start = Instant::now();

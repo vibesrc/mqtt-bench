@@ -1,7 +1,7 @@
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Latency histogram buckets in nanoseconds (finer granularity, especially for higher latencies)
 pub const BUCKETS_NS: &[u64] = &[
@@ -382,6 +382,8 @@ pub struct MetricsCollector {
     /// HDR histogram for exact percentile calculations
     pub hdr_histogram: Arc<HdrHistogram>,
     start_time: Arc<Mutex<Instant>>,
+    /// Measurement phase start timestamp (ns since epoch) for filtering warmup messages
+    measurement_start_ns: Arc<AtomicU64>,
 }
 
 #[allow(dead_code)]
@@ -392,6 +394,7 @@ impl MetricsCollector {
             bucket_histogram: Arc::new(HistogramAccumulator::new()),
             hdr_histogram: Arc::new(HdrHistogram::new().expect("Failed to create HDR histogram")),
             start_time: Arc::new(Mutex::new(Instant::now())),
+            measurement_start_ns: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -411,6 +414,23 @@ impl MetricsCollector {
 
     pub fn reset_start_time(&self) {
         *self.start_time.lock() = Instant::now();
+    }
+
+    /// Set the measurement phase start timestamp (filters out warmup messages)
+    pub fn set_measurement_start(&self) {
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        self.measurement_start_ns.store(now_ns, Ordering::Release);
+    }
+
+    /// Check if a message should be recorded based on its send timestamp
+    /// Returns true if the message was sent during the measurement phase
+    pub fn should_record(&self, sent_ns: u64) -> bool {
+        let start = self.measurement_start_ns.load(Ordering::Acquire);
+        // If measurement start not set (0), record everything
+        start == 0 || sent_ns >= start
     }
 
     /// Reset all metrics (used after warmup)

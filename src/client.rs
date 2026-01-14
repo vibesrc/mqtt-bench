@@ -39,13 +39,6 @@ pub fn extract_timestamp(payload: &[u8]) -> Option<u64> {
     Some(u64::from_le_bytes(payload[0..8].try_into().ok()?))
 }
 
-/// Calculate latency from embedded timestamp
-pub fn calculate_latency_ns(payload: &[u8]) -> Option<u64> {
-    let embedded = extract_timestamp(payload)?;
-    let now = timestamp_ns();
-    Some(now.saturating_sub(embedded))
-}
-
 /// Connection retry settings
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -367,18 +360,21 @@ impl Subscriber {
                         let payload = &publish.payload;
                         let payload_len = payload.len() as u64;
 
-                        // Calculate and record latency
-                        if let Some(latency_ns) = calculate_latency_ns(payload) {
-                            self.metrics.record_latency(latency_ns);
-                            trace!(
-                                client_id = %self.config.client_id,
-                                topic = %publish.topic,
-                                latency_us = latency_ns / 1000,
-                                "Received message"
-                            );
+                        // Extract send timestamp and check if this message should be recorded
+                        // (filters out warmup messages that arrive during measurement phase)
+                        if let Some(sent_ns) = extract_timestamp(payload) {
+                            if self.metrics.should_record(sent_ns) {
+                                let latency_ns = timestamp_ns().saturating_sub(sent_ns);
+                                self.metrics.record_latency(latency_ns);
+                                self.metrics.counters.inc_received(payload_len);
+                                trace!(
+                                    client_id = %self.config.client_id,
+                                    topic = %publish.topic,
+                                    latency_us = latency_ns / 1000,
+                                    "Received message"
+                                );
+                            }
                         }
-
-                        self.metrics.counters.inc_received(payload_len);
                     }
                     Ok(_) => {}
                     Err(e) => {
